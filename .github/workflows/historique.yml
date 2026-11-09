@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       mois:
-        description: "Liste de mois séparés par des espaces, du plus récent au plus ancien (ex. 2026-10 2026-09)"
+        description: "Liste de mois (chacun collecté en deux moitiés) séparés par des espaces, du plus récent au plus ancien (ex. 2026-10 2026-09)"
         required: true
 permissions:
   contents: write
@@ -14,7 +14,7 @@ jobs:
       mois: ${{ steps.p.outputs.mois }}
     steps:
       - id: p
-        run: echo "mois=$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1:]))' ${{ inputs.mois }})" >> "$GITHUB_OUTPUT"
+        run: echo "mois=$(python3 -c 'import json,sys;print(json.dumps([m+h for m in sys.argv[1:] for h in ("-a","-b")]))' ${{ inputs.mois }})" >> "$GITHUB_OUTPUT"
   mois:
     needs: plan
     runs-on: ubuntu-latest
@@ -29,7 +29,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install requests lxml cryptography
-      - run: python3 collect.py fosc-mois ${{ matrix.m }}
+      - run: python3 collect.py fosc-periode ${{ matrix.m }}
       - name: Publier
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |

@@ -27,7 +27,9 @@ import json
 import os
 import struct
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from lxml import etree
@@ -37,17 +39,20 @@ SPARQL = "https://ld.admin.ch/query"
 GRAPH = "https://lindas.admin.ch/foj/zefix"
 UA = "OpenFirm-collecteur/0.2 (donnees publiques FOSC et LINDAS; contact via github.com/macrostests/openfirm-data)"
 DROP = {"uidOrganisationId", "uidOrganisationIdCategorie", "code13", "testImport", "translations", "senderOffice"}
-PAUSE = 0.34
+PAUSE = 0.25  # au plus 4 requêtes par seconde par tâche, réparties sur 3 connexions
 S = requests.Session()
 S.headers["User-Agent"] = UA
+S.mount("https://", requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=4))
 _last = [0.0]
+_lock = threading.Lock()
 
 
 def _wait():
-    d = time.time() - _last[0]
-    if d < PAUSE:
-        time.sleep(PAUSE - d)
-    _last[0] = time.time()
+    with _lock:
+        d = time.time() - _last[0]
+        if d < PAUSE:
+            time.sleep(PAUSE - d)
+        _last[0] = time.time()
 
 
 def get(url, params=None, accept="application/json", tries=6):
@@ -127,8 +132,16 @@ def collect_days(days, writer):
     for day in days:
         metas = list_day(day)
         print(day, len(metas), "publications", file=sys.stderr)
-        for m in metas:
-            o = fetch_xml(m["id"])
+
+        def one(m):
+            try:
+                return m, fetch_xml(m["id"])
+            except Exception as e:  # noqa
+                print("erreur", m["id"], e, file=sys.stderr)
+                return m, None
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            fetched = list(ex.map(one, metas))
+        for m, o in fetched:
             if m["r"] == "KK" and person_debtor(o):
                 writer({"m": {"id": m["id"], "d": m["d"], "r": "KK", "s": m["s"]}, "personne": 1})
                 np += 1
@@ -244,7 +257,7 @@ def run(name, fn, out, pub):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["fosc-mois", "fosc-jour", "lindas", "communes", "dechiffrer"])
+    ap.add_argument("mode", choices=["fosc-mois", "fosc-periode", "fosc-jour", "lindas", "communes", "dechiffrer"])
     ap.add_argument("arg", nargs="?")
     ap.add_argument("--out", default="out")
     ap.add_argument("--pub", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "cle_publique.pem"))
@@ -255,6 +268,14 @@ def main():
         last = calendar.monthrange(y, m)[1]
         days = ["%04d-%02d-%02d" % (y, m, d) for d in range(1, last + 1)
                 if dt.date(y, m, d) < dt.date.today()]
+        run("fosc-%s" % a.arg, lambda w: collect_days(days, w), a.out, a.pub)
+    elif a.mode == "fosc-periode":
+        # arg = AAAA-MM-a (jours 1 à 15) ou AAAA-MM-b (16 à la fin du mois)
+        ym, half = a.arg.rsplit("-", 1)
+        y, m = map(int, ym.split("-"))
+        last = calendar.monthrange(y, m)[1]
+        rng = range(1, 16) if half == "a" else range(16, last + 1)
+        days = ["%04d-%02d-%02d" % (y, m, d) for d in rng if dt.date(y, m, d) < dt.date.today()]
         run("fosc-%s" % a.arg, lambda w: collect_days(days, w), a.out, a.pub)
     elif a.mode == "fosc-jour":
         day = a.arg or (dt.date.today() - dt.timedelta(days=1)).isoformat()
