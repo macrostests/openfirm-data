@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "fosc-mois, fosc-jour ou lindas"
+        description: "fosc-mois, fosc-jour, lindas ou communes"
         required: true
         default: fosc-jour
       arg:

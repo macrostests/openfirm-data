@@ -189,6 +189,22 @@ def collect_lindas(writer):
         print(i + 15, "/", len(ms), "communes,", total, "entités", file=sys.stderr)
 
 
+def collect_communes(writer):
+    rows = sparql(P + "SELECT ?m ?name ?canton WHERE { GRAPH <https://lindas.admin.ch/fso/register> { "
+                  "?m a <https://schema.ld.admin.ch/PoliticalMunicipality> ; schema:name ?name ; "
+                  "schema:containedInPlace ?canton . FILTER(CONTAINS(STR(?canton), \"/canton/\")) "
+                  "FILTER NOT EXISTS { ?m a <https://version.link/Deprecated> } } }")
+    seen = set()
+    for r in rows:
+        bfs = r["m"].rsplit("/", 1)[-1]
+        key = (bfs, r["name"])
+        if key in seen:
+            continue
+        seen.add(key)
+        writer({"bfs": bfs, "name": r["name"], "canton": r["canton"].rsplit("/", 1)[-1]})
+    print(len(seen), "communes", file=sys.stderr)
+
+
 # ---------- chiffrement ----------
 
 def encrypt(data, pub_path):
@@ -228,7 +244,7 @@ def run(name, fn, out, pub):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["fosc-mois", "fosc-jour", "lindas", "dechiffrer"])
+    ap.add_argument("mode", choices=["fosc-mois", "fosc-jour", "lindas", "communes", "dechiffrer"])
     ap.add_argument("arg", nargs="?")
     ap.add_argument("--out", default="out")
     ap.add_argument("--pub", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "cle_publique.pem"))
@@ -245,6 +261,9 @@ def main():
         run("fosc-jour-%s" % day, lambda w: collect_days([day], w), a.out, a.pub)
     elif a.mode == "lindas":
         run("lindas-%s" % dt.date.today().isoformat(), collect_lindas, a.out, a.pub)
+        run("communes-%s" % dt.date.today().isoformat(), collect_communes, a.out, a.pub)
+    elif a.mode == "communes":
+        run("communes-%s" % dt.date.today().isoformat(), collect_communes, a.out, a.pub)
     else:
         sys.stdout.buffer.write(gzip.decompress(decrypt(open(a.arg, "rb").read(), a.cle)))
 
