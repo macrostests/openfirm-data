@@ -119,7 +119,7 @@ def fetch_xml(pid):
 
 def person_debtor(o):
     d = o.get("debtor") if isinstance(o, dict) else None
-    return isinstance(d, dict) and bool(d.get("persons")) and not d.get("companies")
+    return isinstance(d, dict) and bool(d.get("person") or d.get("persons")) and not d.get("companies")
 
 
 def collect_days(days, writer):
