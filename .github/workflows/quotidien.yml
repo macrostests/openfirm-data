@@ -1,0 +1,28 @@
+name: Mise à jour quotidienne
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch: {}
+permissions:
+  contents: write
+concurrency:
+  group: quotidien
+jobs:
+  jour:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install requests lxml cryptography
+      - run: python3 collect.py fosc-jour
+      - name: LINDAS le lundi
+        run: |
+          if [ "$(date -u +%u)" = "1" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then python3 collect.py lindas; fi
+      - name: Publier
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          for f in out/*; do case "$f" in *lindas*) T=lindas;; *) T=jours;; esac
+            gh release view $T >/dev/null 2>&1 || gh release create $T --title $T --notes "Fichiers chiffrés (voir README)." || true
+            gh release upload $T "$f" --clobber; done

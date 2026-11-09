@@ -1,0 +1,31 @@
+name: Collecte (manuelle)
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "fosc-mois, fosc-jour ou lindas"
+        required: true
+        default: fosc-jour
+      arg:
+        description: "AAAA-MM pour fosc-mois, AAAA-MM-JJ pour fosc-jour, vide pour lindas"
+        required: false
+permissions:
+  contents: write
+concurrency:
+  group: collecte-${{ inputs.mode }}-${{ inputs.arg }}
+jobs:
+  collecte:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install requests lxml cryptography
+      - run: python3 collect.py ${{ inputs.mode }} ${{ inputs.arg }}
+      - name: Publier dans la release
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          case "${{ inputs.mode }}" in fosc-mois) T=fosc;; fosc-jour) T=jours;; *) T=lindas;; esac
+          gh release view $T >/dev/null 2>&1 || gh release create $T --title "$T" --notes "Fichiers chiffrés (voir README)."
+          gh release upload $T out/* --clobber

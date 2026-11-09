@@ -1,0 +1,37 @@
+name: Historique FOSC (plusieurs mois)
+on:
+  workflow_dispatch:
+    inputs:
+      mois:
+        description: "Liste de mois séparés par des espaces, du plus récent au plus ancien (ex. 2026-10 2026-09)"
+        required: true
+permissions:
+  contents: write
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      mois: ${{ steps.p.outputs.mois }}
+    steps:
+      - id: p
+        run: echo "mois=$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1:]))' ${{ inputs.mois }})" >> "$GITHUB_OUTPUT"
+  mois:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        m: ${{ fromJson(needs.plan.outputs.mois) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install requests lxml cryptography
+      - run: python3 collect.py fosc-mois ${{ matrix.m }}
+      - name: Publier
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release view fosc >/dev/null 2>&1 || gh release create fosc --title fosc --notes "Fichiers chiffrés (voir README)." || true
+          gh release upload fosc out/* --clobber
