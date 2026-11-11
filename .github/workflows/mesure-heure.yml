@@ -1,0 +1,13 @@
+name: Mesure de l'heure de publication FOSC
+# Une semaine de relevés (du 12 au 19.11.2026) pour choisir l'heure de la collecte quotidienne. À supprimer ensuite.
+on:
+  schedule:
+    - cron: "17 5-19 * * 1-5"
+  workflow_dispatch: {}
+jobs:
+  mesure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install requests && python3 mesure_heure.py
