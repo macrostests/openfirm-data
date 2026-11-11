@@ -1,0 +1,26 @@
+name: Complément FOSC (publications perdues par l'ancienne pagination)
+# Le 11.11.2026, le contrôle indépendant a trouvé environ 37 700 publications HR (et environ 2 100 KK) jamais
+# collectées : l'API pagine sans ordre stable. collect.py est corrigé ; ce workflow récupère seulement ce qui manque,
+# jour par jour (listes dans complements/lotN.json : jours touchés, numéros HR manquants, identifiants KK déjà connus).
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  lot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        lot: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install requests lxml cryptography
+      - run: python3 collect.py fosc-complement complements/lot${{ matrix.lot }}.json
+      - name: Publier
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh release upload fosc out/* --clobber

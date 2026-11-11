@@ -81,17 +81,34 @@ def compact_meta(m):
             "o": (m.get("registrationOffice") or {}).get("displayName")}
 
 
+def _list_rubric(day, rubric):
+    """Une rubrique d'une journée. L'API pagine sans ordre stable : une même publication peut revenir sur deux pages
+    et une autre ne jamais apparaître (constaté le 11.11.2026 : environ 5 % de publications perdues en 2025-2026).
+    On refait donc la pagination tant que le nombre d'identifiants distincts n'atteint pas le total annoncé."""
+    seen, total = {}, None
+    for passe in range(8):
+        page = 0
+        while True:
+            p = [("rubrics", rubric), ("publicationStates", "PUBLISHED"),
+                 ("publicationDate.start", day), ("publicationDate.end", day),
+                 ("pageRequest.size", "200"), ("pageRequest.page", str(page))]
+            j = get(API, p).json()
+            total = j.get("total", 0)
+            for c in j.get("content", []):
+                m = compact_meta(c["meta"])
+                seen.setdefault(m["id"], m)
+            page += 1
+            if page * 200 >= total or not j.get("content"):
+                break
+        if len(seen) >= total:
+            break
+    if total is not None and len(seen) < total:
+        print("ATTENTION", day, rubric, "incomplet :", len(seen), "sur", total, file=sys.stderr)
+    return list(seen.values())
+
+
 def list_day(day):
-    out, page = [], 0
-    while True:
-        p = [("rubrics", "HR"), ("rubrics", "KK"), ("publicationStates", "PUBLISHED"),
-             ("publicationDate.start", day), ("publicationDate.end", day),
-             ("pageRequest.size", "200"), ("pageRequest.page", str(page))]
-        j = get(API, p).json()
-        out += [compact_meta(c["meta"]) for c in j.get("content", [])]
-        page += 1
-        if page * 200 >= j.get("total", 0) or not j.get("content"):
-            return out
+    return _list_rubric(day, "HR") + _list_rubric(day, "KK")
 
 
 def to_obj(el):
@@ -127,10 +144,13 @@ def person_debtor(o):
     return isinstance(d, dict) and bool(d.get("person") or d.get("persons")) and not d.get("companies")
 
 
-def collect_days(days, writer):
+def collect_days(days, writer, garder=None):
+    """garder(meta) -> bool : ne récupère que ces publications (mode complément)."""
     n = np = 0
     for day in days:
         metas = list_day(day)
+        if garder is not None:
+            metas = [m for m in metas if garder(m)]
         print(day, len(metas), "publications", file=sys.stderr)
 
         def one(m):
@@ -257,7 +277,7 @@ def run(name, fn, out, pub):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["fosc-mois", "fosc-periode", "fosc-jour", "lindas", "communes", "dechiffrer"])
+    ap.add_argument("mode", choices=["fosc-mois", "fosc-periode", "fosc-jour", "fosc-complement", "lindas", "communes", "dechiffrer"])
     ap.add_argument("arg", nargs="?")
     ap.add_argument("--out", default="out")
     ap.add_argument("--pub", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "cle_publique.pem"))
@@ -280,6 +300,20 @@ def main():
     elif a.mode == "fosc-jour":
         day = a.arg or (dt.date.today() - dt.timedelta(days=1)).isoformat()
         run("fosc-jour-%s" % day, lambda w: collect_days([day], w), a.out, a.pub)
+    elif a.mode == "fosc-complement":
+        # arg = complements/<lot>.json : {"jours": [...], "hr_manquants": [numéros], "kk_connus": [identifiants]}
+        # Récupère seulement les publications perdues par l'ancienne pagination (numéros HR manquants, KK inconnus).
+        spec = json.load(open(a.arg))
+        hr = set(int(x) for x in spec["hr_manquants"])
+        kk = set(spec["kk_connus"])
+
+        def garder(m):
+            if m.get("r") == "HR":
+                num = (m.get("n") or "").rsplit("-", 1)[-1]
+                return num.isdigit() and int(num) in hr
+            return m["id"] not in kk
+        lot = os.path.splitext(os.path.basename(a.arg))[0]
+        run("fosc-complement-%s" % lot, lambda w: collect_days(spec["jours"], w, garder), a.out, a.pub)
     elif a.mode == "lindas":
         run("lindas-%s" % dt.date.today().isoformat(), collect_lindas, a.out, a.pub)
         run("communes-%s" % dt.date.today().isoformat(), collect_communes, a.out, a.pub)
