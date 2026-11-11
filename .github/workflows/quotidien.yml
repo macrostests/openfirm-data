@@ -2,7 +2,12 @@ name: Mise à jour quotidienne
 on:
   schedule:
     - cron: "23 5 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      jour:
+        description: "Jour à collecter (AAAA-MM-JJ) ; vide = la veille"
+        required: false
+        default: ""
 permissions:
   contents: write
 concurrency:
@@ -16,7 +21,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install requests lxml cryptography
-      - run: python3 collect.py fosc-jour
+      - run: python3 collect.py fosc-jour ${{ inputs.jour }}
       - name: LINDAS le lundi
         run: |
           if [ "$(date -u +%u)" = "1" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then python3 collect.py lindas; fi
