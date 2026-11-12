@@ -170,7 +170,7 @@ def lire_pdf(n):
     return buf if buf.startswith(b"%PDF") else None
 
 
-def societe(uid, cibles=()):
+def societe(uid, cibles=(), depart_cite=None):
     u = uid.replace("-", "").replace(".", "")
     r = req("POST", Z + "/firm/search.json", json={"name": uid, "languageKey": "fr", "maxEntries": 5},
             headers={"Accept": "application/json"})
@@ -192,6 +192,10 @@ def societe(uid, cibles=()):
     # même après 2018 (elle cite la dernière d'avant)
     depart = pubs[0] if pubs else None
     t = R_TAG.sub("", depart.get("message") or "") if depart else ""
+    # Zefix sans publication (ou plus récente que notre propre départ) : on part de la citation trouvée dans nos
+    # publications d'après 2018 (« (FOSC du 03.05.2017, p. 0/3500975) »), donnée dans le lot.
+    if depart_cite and (not t or not citation(t)):
+        t = "(FOSC du %s, p. 0/%s)" % (depart_cite[0], depart_cite[1])
     vus = {str(p.get("shabId")) for p in pubs}
     textes = [x["t"] for x in zef]
     for _ in range(PROFONDEUR):
@@ -229,7 +233,9 @@ def main():
     lot = sys.argv[1]
     lignes = [l.rstrip("\n").split("\t") for l in open(lot) if l.strip()]
     uids = [x[0].strip() for x in lignes]
-    cib = {x[0].strip(): [c for c in (x[1].split("|") if len(x) > 1 else []) if c] for x in lignes}
+    cib = {x[0].strip(): [c for c in (x[1].split("|") if len(x) > 1 else []) if c and c != "-"] for x in lignes}
+    # 3e colonne facultative : « JJ.MM.AAAA:numéro » de la publication citée par notre plus ancienne publication
+    dep = {x[0].strip(): tuple(x[2].strip().split(":", 1)) for x in lignes if len(x) > 2 and ":" in x[2]}
     nom = "zefix-" + os.path.splitext(os.path.basename(lot))[0]
     t0 = time.time()
     stats = {}
@@ -243,7 +249,7 @@ def main():
                 w({"reprise": uids[i:]})
                 return
             try:
-                o = societe(uid, cib.get(uid) or ())
+                o = societe(uid, cib.get(uid) or (), dep.get(uid))
             except Refus:
                 print("ARRÊT : refus répétés après %d sociétés" % i, file=sys.stderr)
                 open("/tmp/arret", "w").write("refus\n")
