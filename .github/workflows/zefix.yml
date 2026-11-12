@@ -1,0 +1,30 @@
+name: Historique avant 2018 (Zefix + archive FOSC)
+# Publications d'avant le 3.9.2018 pour des listes de sociétés (zefix/*.txt), une requête à la fois, lentement.
+# Sortie chiffrée dans la release « zefix ». Les journaux n'affichent ni texte ni nom.
+on:
+  workflow_dispatch:
+    inputs:
+      lots:
+        description: "Lots séparés par des espaces (ex. test-p1 ou lot-p1-00 lot-p1-01)"
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: zefix
+jobs:
+  lots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install requests lxml cryptography pypdf
+      - name: Collecter et publier lot par lot
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release view zefix >/dev/null 2>&1 || gh release create zefix --title zefix --notes "Historique d'avant 2018 (Zefix, archive FOSC), fichiers chiffrés." || true
+          for l in ${{ inputs.lots }}; do
+            OF_LIMITE_S=$((340*60 - SECONDS - 300)) python3 historique_zefix.py zefix/$l.txt
+            gh release upload zefix out/zefix-$l.jsonl.gz.enc --clobber
+          done
