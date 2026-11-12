@@ -233,6 +233,7 @@ def main():
     nom = "zefix-" + os.path.splitext(os.path.basename(lot))[0]
     t0 = time.time()
     stats = {}
+    os.makedirs("out", exist_ok=True)
 
     def collecte(w):
         for i, uid in enumerate(uids):
@@ -250,6 +251,11 @@ def main():
                 return
             stats[o.get("fin")] = stats.get(o.get("fin"), 0) + 1
             w(o)
+            if (i + 1) % 100 == 0:
+                # progression lisible sans clé : comptes seulement, aucun nom ni texte
+                json.dump({"lot": nom, "faites": i + 1, "total": len(uids), "secondes": round(time.time() - t0),
+                           "fins": stats, "refus_de_suite": refus[0], "maj": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                          open(os.path.join("out", "progres-%s.json" % os.environ.get("OF_TACHE", "0")), "w"))
             if (i + 1) % 200 == 0:
                 print("%d/%d sociétés, %.0f s, %s" % (i + 1, len(uids), time.time() - t0, stats), file=sys.stderr,
                       flush=True)

@@ -1,9 +1,10 @@
 name: Historique avant 2018 (Zefix + archive FOSC)
-# Publications d'avant le 3.9.2018 pour des listes de sociétés (zefix/*.txt), une requête à la fois, lentement.
-# Sortie chiffrée dans la release « zefix ». Les journaux n'affichent ni texte ni nom.
-# Enchaînement : quand le temps d'une tâche est presque écoulé, le workflow se relance lui-même avec les lots restants
-# (ordre : zefix/ORDRE.txt — d'abord les sociétés où une personne n'est citée que par son nom court, puis les
-# entreprises individuelles sans titulaire connu). Un lot interrompu est repris au début.
+# Publications d'avant le 3.9.2018 pour des listes de sociétés (zefix/*.txt). Plusieurs tâches en parallèle (entrée
+# « taches »), chacune lente (une requête à la fois, au plus une toutes les 0,5 s). Sortie chiffrée dans la release
+# « zefix » ; progression (comptes seulement, aucun nom) dans progres-<tâche>.json. Les journaux n'affichent ni texte
+# ni nom. Quand le temps d'une tâche est presque écoulé, ses lots restants sont gardés ; la dernière étape relance
+# le workflow avec tous les lots restants. Un lot interrompu est repris au début. Sur refus répétés : arrêt, pas de
+# relance.
 on:
   workflow_dispatch:
     inputs:
@@ -11,38 +12,78 @@ on:
         description: "Lots séparés par des espaces (vide = tout zefix/ORDRE.txt)"
         required: false
         default: ""
+      taches:
+        description: "Nombre de tâches en parallèle (1 à 10)"
+        required: false
+        default: "6"
 permissions:
   contents: write
   actions: write
 concurrency:
   group: zefix
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      idx: ${{ steps.p.outputs.idx }}
+    steps:
+      - id: p
+        run: |
+          n=${{ inputs.taches }}; [ "$n" -ge 1 ] 2>/dev/null || n=6; [ $n -gt 10 ] && n=10
+          echo "idx=$(python3 -c "import json;print(json.dumps(list(range($n))))")" >> $GITHUB_OUTPUT
   lots:
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        i: ${{ fromJson(needs.plan.outputs.idx) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install requests lxml cryptography pypdf
       - name: Collecter et publier lot par lot
-        env: { GH_TOKEN: "${{ github.token }}" }
+        env: { GH_TOKEN: "${{ github.token }}", OF_TACHE: "${{ matrix.i }}" }
         run: |
           gh release view zefix >/dev/null 2>&1 || gh release create zefix --title zefix --notes "Historique d'avant 2018 (Zefix, archive FOSC), fichiers chiffrés." || true
+          N=$(echo '${{ needs.plan.outputs.idx }}' | python3 -c "import json,sys;print(len(json.load(sys.stdin)))")
           LOTS="${{ inputs.lots }}"; [ -z "$LOTS" ] && LOTS=$(cat zefix/ORDRE.txt)
-          set -- $LOTS
+          # lots de cette tâche : un sur N, dans l'ordre de priorité
+          MES=$(python3 -c "import sys;l='''$LOTS'''.split();print(' '.join(l[${{ matrix.i }}::$N]))")
+          set -- $MES
+          mkdir -p reste
           while [ $# -gt 0 ]; do
             l=$1
             reste=$((330*60 - SECONDS))
             if [ $reste -lt 2700 ]; then break; fi
             OF_LIMITE_S=$((reste - 600)) python3 historique_zefix.py zefix/$l.txt
             gh release upload zefix out/zefix-$l.jsonl.gz.enc --clobber
+            gh release upload zefix out/progres-$OF_TACHE.json --clobber || true
             shift
-            # lot interrompu par la limite de temps : on le reprend en entier au prochain passage
             if grep -q "^$l$" /tmp/interrompus 2>/dev/null; then set -- $l "$@"; break; fi
+            if [ -f /tmp/arret ]; then break; fi
           done
-          if [ -f /tmp/arret ]; then echo "Refus répétés de la source : pas de relance"; exit 0; fi
-          if [ $# -gt 0 ]; then
-            echo "Relance avec $# lots restants"
-            gh workflow run zefix.yml -f lots="$*"
+          echo "$*" > reste/reste-${{ matrix.i }}.txt
+          [ -f /tmp/arret ] && echo arret > reste/arret-${{ matrix.i }}.txt || true
+      - uses: actions/upload-artifact@v4
+        with: { name: "reste-${{ matrix.i }}", path: reste/, retention-days: 3 }
+  relance:
+    needs: [plan, lots]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: reste, merge-multiple: true }
+      - name: Relancer avec les lots restants
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          if ls reste/arret-* >/dev/null 2>&1; then echo "Refus répétés de la source : pas de relance"; exit 0; fi
+          R=$(cat reste/reste-*.txt 2>/dev/null | tr '\n' ' ' | xargs)
+          if [ -n "$R" ]; then
+            echo "Relance avec : $R"
+            gh workflow run zefix.yml -R ${{ github.repository }} -f lots="$R" -f taches="${{ inputs.taches }}"
+          else
+            echo "Tout est collecté."
           fi
