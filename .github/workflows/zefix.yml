@@ -1,14 +1,19 @@
 name: Historique avant 2018 (Zefix + archive FOSC)
 # Publications d'avant le 3.9.2018 pour des listes de sociétés (zefix/*.txt), une requête à la fois, lentement.
 # Sortie chiffrée dans la release « zefix ». Les journaux n'affichent ni texte ni nom.
+# Enchaînement : quand le temps d'une tâche est presque écoulé, le workflow se relance lui-même avec les lots restants
+# (ordre : zefix/ORDRE.txt — d'abord les sociétés où une personne n'est citée que par son nom court, puis les
+# entreprises individuelles sans titulaire connu). Un lot interrompu est repris au début.
 on:
   workflow_dispatch:
     inputs:
       lots:
-        description: "Lots séparés par des espaces (ex. test-p1 ou lot-p1-00 lot-p1-01)"
-        required: true
+        description: "Lots séparés par des espaces (vide = tout zefix/ORDRE.txt)"
+        required: false
+        default: ""
 permissions:
   contents: write
+  actions: write
 concurrency:
   group: zefix
 jobs:
@@ -24,7 +29,20 @@ jobs:
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           gh release view zefix >/dev/null 2>&1 || gh release create zefix --title zefix --notes "Historique d'avant 2018 (Zefix, archive FOSC), fichiers chiffrés." || true
-          for l in ${{ inputs.lots }}; do
-            OF_LIMITE_S=$((340*60 - SECONDS - 300)) python3 historique_zefix.py zefix/$l.txt
+          LOTS="${{ inputs.lots }}"; [ -z "$LOTS" ] && LOTS=$(cat zefix/ORDRE.txt)
+          set -- $LOTS
+          while [ $# -gt 0 ]; do
+            l=$1
+            reste=$((330*60 - SECONDS))
+            if [ $reste -lt 2700 ]; then break; fi
+            OF_LIMITE_S=$((reste - 600)) python3 historique_zefix.py zefix/$l.txt
             gh release upload zefix out/zefix-$l.jsonl.gz.enc --clobber
+            shift
+            # lot interrompu par la limite de temps : on le reprend en entier au prochain passage
+            if grep -q "^$l$" /tmp/interrompus 2>/dev/null; then set -- $l "$@"; break; fi
           done
+          if [ -f /tmp/arret ]; then echo "Refus répétés de la source : pas de relance"; exit 0; fi
+          if [ $# -gt 0 ]; then
+            echo "Relance avec $# lots restants"
+            gh workflow run zefix.yml -f lots="$*"
+          fi

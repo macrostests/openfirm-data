@@ -18,6 +18,9 @@ ce qui est fait). Sortie chiffrée comme le reste du dépôt (cle_publique.pem).
 jamais de texte de publication ni de nom.
 
 Usage : python3 historique_zefix.py zefix/lot-p1-01.txt   -> out/zefix-lot-p1-01.jsonl.gz.enc
+Ligne de lot : « IDE » ou « IDE<tab>cible1|cible2 » ; cible = « k:empreinte » (k mots, 16 premiers caractères du
+SHA-256 du nom court normalisé : aucun nom de personne n'est écrit dans ce dépôt public) ou « *titulaire ».
+La chaîne s'arrête dès que toutes les cibles sont trouvées avec leur identité (origine, domicile).
 Ligne de sortie : {"uid", "ehraid", "zefix": [{"d","id","t"}...], "shab": [{"id","d","t"}...], "fin": raison}
 """
 import io
@@ -98,7 +101,76 @@ def citation(t):
     return "%s-%02d-%02d" % (a, int(mo), int(j)), n
 
 
-def societe(uid):
+def _norm(t):
+    import unicodedata
+    t = unicodedata.normalize("NFKD", t or "")
+    t = "".join(c for c in t if not unicodedata.combining(c)).lower()
+    return re.sub(r"[^a-z0-9]+", " ", t).strip()
+
+
+R_TIT = re.compile(r"(titulaire|inhaber|titolare)")
+
+
+R_ORIG_SUITE = re.compile(r"^(?:[a-z\-]+ ){0,4}(?:d|de|von|di|da|du|des|ressortissant\w*|citoyen\w*|cittadin\w*|"
+                          r"staatsangeh\w*|apos)\b")
+
+
+def empreinte(nom):
+    import hashlib
+    return hashlib.sha256(nom.encode()).hexdigest()[:16]
+
+
+def cibles_trouvees(cibles, textes):
+    """Vrai si chaque cible apparaît suivie de son identité (origine…) dans les textes."""
+    if not cibles:
+        return False
+    n = _norm(" ".join(textes))
+    mots = n.split()
+    for c in cibles:
+        if c == "*titulaire":
+            if not R_TIT.search(n):
+                return False
+            continue
+        k, h = c.split(":", 1)
+        k = int(k)
+        ok = False
+        for i in range(len(mots) - k):
+            if empreinte(" ".join(mots[i:i + k])) == h and R_ORIG_SUITE.match(" ".join(mots[i + k:i + k + 6])):
+                ok = True
+                break
+        if not ok:
+            return False
+    return True
+
+
+def lire_pdf(n):
+    """PDF d'une publication de l'archive ; None si absent ; « liste » si c'est une grande liste (conversion IDE…)."""
+    d = time.time() - _last[0]
+    if d < PAUSE:
+        time.sleep(PAUSE - d)
+    _last[0] = time.time()
+    try:
+        with S.get(SHAB % n, timeout=60, stream=True) as r:
+            if r.status_code in (403, 429):
+                refus[0] += 1
+                if refus[0] >= 5:
+                    raise Refus()
+                time.sleep(60)
+                return None
+            if r.status_code != 200:
+                return None
+            refus[0] = 0
+            buf = b""
+            for chunk in r.iter_content(65536):
+                buf += chunk
+                if len(buf) > 1500000:
+                    return "liste"
+    except requests.RequestException:
+        return None
+    return buf if buf.startswith(b"%PDF") else None
+
+
+def societe(uid, cibles=()):
     u = uid.replace("-", "").replace(".", "")
     r = req("POST", Z + "/firm/search.json", json={"name": uid, "languageKey": "fr", "maxEntries": 5},
             headers={"Accept": "application/json"})
@@ -121,7 +193,11 @@ def societe(uid):
     depart = pubs[0] if pubs else None
     t = R_TAG.sub("", depart.get("message") or "") if depart else ""
     vus = {str(p.get("shabId")) for p in pubs}
+    textes = [x["t"] for x in zef]
     for _ in range(PROFONDEUR):
+        if cibles_trouvees(cibles, textes):
+            out["fin"] = "cibles_trouvees"
+            return out
         c = citation(t)
         if not c:
             out["fin"] = ("citation_ancienne" if R_CITE_ANCIENNE.search(t) else "inscription") if t else \
@@ -132,22 +208,28 @@ def societe(uid):
             out["fin"] = "boucle"
             return out
         vus.add(n)
-        r = req("GET", SHAB % n)
-        if r is None or r.status_code != 200 or not r.content.startswith(b"%PDF"):
+        b = lire_pdf(n)
+        if b == "liste":
+            out["fin"] = "liste_generale"   # p. ex. conversion IDE 2013-2014 : ne cite pas la publication précédente
+            return out
+        if b is None:
             out["fin"] = "archive_absente"
             return out
-        t = texte_pdf(r.content)
+        t = texte_pdf(b)
         if not t:
             out["fin"] = "pdf_illisible"
             return out
         out["shab"].append({"id": n, "d": date, "t": t[:20000]})
+        textes.append(t[:20000])
     out["fin"] = "profondeur"
     return out
 
 
 def main():
     lot = sys.argv[1]
-    uids = [l.strip() for l in open(lot) if l.strip()]
+    lignes = [l.rstrip("\n").split("\t") for l in open(lot) if l.strip()]
+    uids = [x[0].strip() for x in lignes]
+    cib = {x[0].strip(): [c for c in (x[1].split("|") if len(x) > 1 else []) if c] for x in lignes}
     nom = "zefix-" + os.path.splitext(os.path.basename(lot))[0]
     t0 = time.time()
     stats = {}
@@ -156,12 +238,14 @@ def main():
         for i, uid in enumerate(uids):
             if time.time() - t0 > LIMITE_S:
                 print("limite de temps : %d sociétés sur %d" % (i, len(uids)), file=sys.stderr)
+                open("/tmp/interrompus", "a").write(nom.replace("zefix-", "") + "\n")
                 w({"reprise": uids[i:]})
                 return
             try:
-                o = societe(uid)
+                o = societe(uid, cib.get(uid) or ())
             except Refus:
                 print("ARRÊT : refus répétés après %d sociétés" % i, file=sys.stderr)
+                open("/tmp/arret", "w").write("refus\n")
                 w({"reprise": uids[i:]})
                 return
             stats[o.get("fin")] = stats.get(o.get("fin"), 0) + 1
