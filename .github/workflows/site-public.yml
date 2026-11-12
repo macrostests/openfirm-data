@@ -1,0 +1,178 @@
+name: Site (publication, minutes gratuites du dépôt public)
+
+# Option B choisie par Louis le 12.11.2026 (20 h 34) : le code du site reste privé (macrostests/openfirm) ; ce workflow
+# tourne dans le dépôt public openfirm-data (minutes GitHub illimitées) et lit le code avec un jeton en lecture seule
+# (secret OPENFIRM_CODE). Les journaux de ce dépôt sont publics : OF_JOURNAL_PUBLIC=1 (aucun exemple d'adresse).
+
+# Chaque matin à 08:47 UTC, après la collecte de macrostests/openfirm-data (prévue à 05:23 UTC, souvent retardée par GitHub) :
+#  - lundi à samedi : build incrémental (fiches des sociétés publiées les 7 derniers jours + toutes les listes) ;
+#  - dimanche, ou à la demande : build complet (toutes les fiches, et suppression des pages disparues).
+# Seuls les fichiers changés partent dans R2. Le Worker est redéployé à la fin.
+# Tant que la variable de dépôt OF_ENV ne vaut pas « production », tout le site est en noindex.
+
+on:
+  workflow_dispatch:
+    inputs:
+      complet:
+        description: "Build complet (toutes les fiches)"
+        type: boolean
+        default: false
+      worker_seul:
+        description: "Redéployer seulement le Worker"
+        type: boolean
+        default: false
+      nettoyage:
+        description: "Autoriser la suppression de plus de 20 % des fichiers (passage aux paquets, une seule fois)"
+        type: boolean
+        default: false
+      refaire_cantons:
+        description: "Refaire aussi toutes les fiches de ces cantons (ex. VD,GE,NE,FR)"
+        type: string
+        default: ""
+
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    env:
+      # Identifiant du compte Cloudflare : pas secret (il figure dans les adresses du tableau de bord).
+      R2_ACCOUNT_ID: ff81216e3bb191aa13a379e2f9244ab1
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      # Mise en ligne sur openfirm.ch : « ok » de Louis le 10.11.2026 à 15 h 03.
+      OF_ENV: production
+      # Vague d'ouverture à Google (0 à 3) : variable de dépôt OF_VAGUE, changée à la main quand le seuil est atteint.
+      OF_VAGUE: '0'
+      # Pages personnes : en ligne depuis le 11.11.2026 (« ok » de Louis) ; vague 1 = proposées à Google si au moins 2 mandats actifs…
+      OF_VAGUE_P: '1'
+      OF_PERSONNES: '1'
+      # Jour de mise en ligne sur openfirm.ch (AAAA-MM-JJ) : déclenche le calendrier seo/calendrier.json.
+      OF_OUVERTURE: '2026-11-10'
+      # Fiches assemblées par le Worker à partir des données des sociétés, rangées par paquets dans R2
+      # (fb/ et pb/, voir of/paquets.py : environ 37 000 fichiers au lieu d'un par société et par personne).
+      OF_FICHES: worker
+      OF_R2_SUPPRESSION_MASSIVE: ${{ inputs.nettoyage && '1' || '0' }}
+      OF_REFAIRE_CANTONS: ${{ inputs.refaire_cantons || '' }}
+      OF_JOURNAL_PUBLIC: "1"
+    steps:
+      # Place disque : la base nationale (3,5 Go), les fichiers chiffrés et les paquets temporaires (fiches et
+      # personnes, plusieurs Go) dépassent l'espace libre par défaut. On retire des outils inutiles ici.
+      - name: Libérer de l'espace disque
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+      # Mémoire : la machine GitHub a 7 Go de mémoire vive. L'index national des personnes (environ 1,1 million de
+      # personnes) monte autour de 6 Go : on ajoute 10 Go de mémoire d'échange sur le disque temporaire (/mnt)
+      # pour que le calcul ralentisse au lieu d'être arrêté.
+      - name: Mémoire d'échange
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile
+          sudo fallocate -l 10G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+      - uses: actions/checkout@v4
+        with:
+          repository: macrostests/openfirm
+          token: ${{ secrets.OPENFIRM_CODE }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dépendances
+        run: pip install jinja2 markdown pyyaml cryptography boto3
+
+      - name: Données chiffrées (cache)
+        if: ${{ !inputs.worker_seul }}
+        uses: actions/cache@v4
+        with:
+          path: data/national/enc
+          key: enc-${{ github.run_id }}
+          restore-keys: enc-
+
+      # Lecture des personnes déjà faite les jours précédents (of/reseau.py, CacheMandats) : environ 25 min de moins.
+      - name: Cache des mandats
+        if: ${{ !inputs.worker_seul }}
+        uses: actions/cache@v4
+        with:
+          path: data/mandats-cache.sqlite
+          key: mandats-${{ github.run_id }}
+          restore-keys: mandats-
+
+      - name: Import des données
+        if: ${{ !inputs.worker_seul }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENFIRM_DATA_KEY: ${{ secrets.OPENFIRM_DATA_KEY }}
+        run: |
+          mkdir -p keys
+          umask 077
+          printf '%s\n' "$OPENFIRM_DATA_KEY" > keys/openfirm-data.pem
+          python tools/importer.py
+          rm -f keys/openfirm-data.pem
+
+      - name: Build et envoi vers R2
+        if: ${{ !inputs.worker_seul }}
+        run: |
+          # Build complet : à la demande, ou le premier dimanche du mois (environ 4 h de calcul ; le reste du temps,
+          # le build incrémental suffit et les minutes GitHub du dépôt privé restent sous les 2 000 par mois).
+          if [ "${{ inputs.complet }}" = "true" ] || { [ "$(date -u +%u)" = "7" ] && [ "$(date -u +%d)" -le 7 ]; }; then
+            echo "Build complet"
+          else
+            export OF_SINCE=$(date -u -d '-7 days' +%F)
+            echo "Build incrémental depuis $OF_SINCE"
+          fi
+          OF_OUTPUT=r2 OF_LASTMOD=ecrire OF_CACHE_MANDATS=data/mandats-cache.sqlite python build.py
+
+      - name: CSP (empreinte du script de thème)
+        id: csp
+        run: echo "csp=$(python tools/csp.py)" >> "$GITHUB_OUTPUT"
+
+      - name: Gabarits et textes pour le Worker
+        run: |
+          [ -f hosting/worker/src/donnees.json ] || python tools/worker_data.py
+          cd hosting/worker && npm ci --no-audit --no-fund && node tools/precompile.cjs
+          # Étape du calendrier d'ouverture (vague de fiches indexables, langues) : lue par le Worker à chaque visite.
+          cd ../.. && python -c "import build; print('VAGUE=%d' % build.VAGUE); print('LANGUES=%d' % build.INDEX_WAVE); print('VAGUE_P=%d' % build.VAGUE_P)" >> "$GITHUB_ENV"
+
+      - name: Recherche avancée (base D1)
+        if: ${{ !inputs.worker_seul }}
+        working-directory: hosting/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ff81216e3bb191aa13a379e2f9244ab1
+        run: |
+          # Sociétés nouvelles ou changées depuis le dernier chargement accepté (of/filtres.py). L'état n'est remplacé
+          # qu'après le succès de D1 : en cas d'échec, tout est renvoyé au prochain passage.
+          f=../../dist/_recherche/charge.sql
+          if [ -s "$f" ] && grep -q "INSERT\|DELETE" "$f"; then
+            npx --yes wrangler@4 d1 execute openfirm-recherche --remote --file "$f" --yes
+          fi
+          npx --yes wrangler@4 r2 object put openfirm-site/_state/recherche.json.gz --file ../../dist/_recherche/etat.json.gz --remote
+
+      - name: Déploiement du Worker
+        working-directory: hosting/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ff81216e3bb191aa13a379e2f9244ab1
+        run: |
+          preview=1
+          [ "$OF_ENV" = "production" ] && preview=0
+          npx --yes wrangler@4 deploy --var "CSP:${{ steps.csp.outputs.csp }}" --var "PREVIEW:$preview" \
+            --var "VAGUE:$VAGUE" --var "LANGUES:$LANGUES" --var "VAGUE_P:$VAGUE_P"
+
+      - name: IndexNow (Bing)
+        if: ${{ env.OF_ENV == 'production' && !inputs.worker_seul }}
+        run: python tools/indexnow.py
