@@ -33,7 +33,11 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
         run: |
-          n=$(aws s3api list-objects-v2 --bucket openfirm-site --max-items 1 \
+          echo "longueurs : id=${#AWS_ACCESS_KEY_ID} (attendu 32), secret=${#AWS_SECRET_ACCESS_KEY} (attendu 64)"
+          if aws s3api list-objects-v2 --bucket openfirm-site --max-keys 1 \
                 --endpoint-url https://ff81216e3bb191aa13a379e2f9244ab1.r2.cloudflarestorage.com \
-                --query 'length(Contents)' --output text 2>/dev/null || echo 0)
-          if [ "$n" = "1" ]; then echo "OK clé R2"; else echo "ÉCHEC clé R2"; exit 1; fi
+                --query 'KeyCount' --output text > /tmp/n 2> /tmp/err; then
+            echo "OK clé R2 (objets lus : $(cat /tmp/n))"
+          else
+            echo "ÉCHEC clé R2 : $(grep -oE '\(([A-Za-z]+)\)' /tmp/err | head -1)"; exit 1
+          fi
