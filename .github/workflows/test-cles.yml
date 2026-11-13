@@ -1,0 +1,39 @@
+name: Test des clés (lecture seule)
+
+# Vérifie, sans rien publier ni afficher, que les secrets de publication de ce dépôt fonctionnent :
+#  - OPENFIRM_DATA_KEY correspond bien à cle_publique.pem (empreintes comparées) ;
+#  - R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY peuvent lister le bucket openfirm-site (lecture d'un seul nom).
+# Aucune valeur n'est écrite dans le journal (public).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clé de données
+        env:
+          OPENFIRM_DATA_KEY: ${{ secrets.OPENFIRM_DATA_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$OPENFIRM_DATA_KEY" > /tmp/k.pem
+          a=$(openssl pkey -in /tmp/k.pem -pubout 2>/dev/null | sha256sum | cut -c1-12)
+          b=$(openssl pkey -pubin -in cle_publique.pem -pubout | sha256sum | cut -c1-12)
+          rm -f /tmp/k.pem
+          if [ -n "$a" ] && [ "$a" = "$b" ]; then echo "OK clé de données"; else echo "ÉCHEC clé de données"; exit 1; fi
+      - name: Clé R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          n=$(aws s3api list-objects-v2 --bucket openfirm-site --max-items 1 \
+                --endpoint-url https://ff81216e3bb191aa13a379e2f9244ab1.r2.cloudflarestorage.com \
+                --query 'length(Contents)' --output text 2>/dev/null || echo 0)
+          if [ "$n" = "1" ]; then echo "OK clé R2"; else echo "ÉCHEC clé R2"; exit 1; fi
