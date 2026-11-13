@@ -1,0 +1,24 @@
+name: Test des archives FOSC (lecture seule)
+# Vérifie les règles robots.txt et repère les liens d'archive (numéros quotidiens 2002-2018). Aucune donnée gardée.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: robots.txt
+        run: |
+          UA="OpenFirm-archive-test/1.0 (contact@openfirm.ch)"
+          for h in www.shab.ch www.e-helvetica.nb.admin.ch www.e-periodica.ch e-helvetica.nb.admin.ch; do
+            echo "=== $h"; curl -s -A "$UA" --max-time 20 "https://$h/robots.txt" | head -40; echo
+          done
+      - name: Liens d'archive sur shab.ch
+        run: |
+          UA="OpenFirm-archive-test/1.0 (contact@openfirm.ch)"
+          for u in "https://www.shab.ch/" "https://www.shab.ch/shabforms/COMMON/application/applicationGrid.jsp?newLanguage=FR" "https://archiv.shab.ch/" ; do
+            echo "=== $u"; curl -sL -A "$UA" --max-time 30 "$u" -o p.html -w "%{http_code} %{size_download}\n"
+            grep -oiE '(href|src)="[^"]*(archiv|archive|ausgabe|edition|pdf|issue|gazette)[^"]*"' p.html | sort -u | head -40
+          done
