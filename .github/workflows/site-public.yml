@@ -29,6 +29,14 @@ on:
         description: "Refaire aussi toutes les fiches de ces cantons (ex. VD,GE,NE,FR)"
         type: string
         default: ""
+      a_blanc:
+        description: "Comptage à blanc : tout calculer, ne RIEN écrire (ni R2, ni D1, ni Worker, ni IndexNow)"
+        type: boolean
+        default: false
+      branche:
+        description: "Branche du code du site (vide = main)"
+        type: string
+        default: ""
 
 concurrency:
   group: site
@@ -62,6 +70,7 @@ jobs:
       OF_R2_SUPPRESSION_MASSIVE: ${{ inputs.nettoyage && '1' || '0' }}
       OF_REFAIRE_CANTONS: ${{ inputs.refaire_cantons || '' }}
       OF_JOURNAL_PUBLIC: "1"
+      OF_R2_A_BLANC: ${{ inputs.a_blanc && '1' || '0' }}
     steps:
       # Place disque : la base nationale (3,5 Go), les fichiers chiffrés et les paquets temporaires (fiches et
       # personnes, plusieurs Go) dépassent l'espace libre par défaut. On retire des outils inutiles ici.
@@ -86,6 +95,7 @@ jobs:
         with:
           repository: macrostests/openfirm
           token: ${{ secrets.OPENFIRM_CODE }}
+          ref: ${{ inputs.branche || 'main' }}
 
       - uses: actions/setup-python@v5
         with:
@@ -134,7 +144,10 @@ jobs:
             export OF_SINCE=$(date -u -d '-7 days' +%F)
             echo "Build incrémental depuis $OF_SINCE"
           fi
-          OF_OUTPUT=r2 OF_LASTMOD=ecrire OF_CACHE_MANDATS=data/mandats-cache.sqlite python build.py
+          cache=data/mandats-cache.sqlite
+          # À blanc : le cache des lectures n'est pas modifié (copie jetable)
+          if [ "$OF_R2_A_BLANC" = "1" ]; then cp -f "$cache" /tmp/mandats-blanc.sqlite 2>/dev/null || true; cache=/tmp/mandats-blanc.sqlite; fi
+          OF_OUTPUT=r2 OF_LASTMOD=ecrire OF_CACHE_MANDATS=$cache python build.py
 
       - name: CSP (empreinte du script de thème)
         id: csp
@@ -148,7 +161,7 @@ jobs:
           cd ../.. && python -c "import build; print('VAGUE=%d' % build.VAGUE); print('LANGUES=%d' % build.INDEX_WAVE); print('VAGUE_P=%d' % build.VAGUE_P)" >> "$GITHUB_ENV"
 
       - name: Recherche avancée (base D1)
-        if: ${{ !inputs.worker_seul }}
+        if: ${{ !inputs.worker_seul && !inputs.a_blanc }}
         working-directory: hosting/worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -163,6 +176,7 @@ jobs:
           npx --yes wrangler@4 r2 object put openfirm-site/_state/recherche.json.gz --file ../../dist/_recherche/etat.json.gz --remote
 
       - name: Déploiement du Worker
+        if: ${{ !inputs.a_blanc }}
         working-directory: hosting/worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -174,5 +188,5 @@ jobs:
             --var "VAGUE:$VAGUE" --var "LANGUES:$LANGUES" --var "VAGUE_P:$VAGUE_P"
 
       - name: IndexNow (Bing)
-        if: ${{ env.OF_ENV == 'production' && !inputs.worker_seul }}
+        if: ${{ env.OF_ENV == 'production' && !inputs.worker_seul && !inputs.a_blanc }}
         run: python tools/indexnow.py
