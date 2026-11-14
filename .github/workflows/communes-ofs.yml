@@ -2,13 +2,13 @@ name: Communes OFS (répertoire historisé, données publiques)
 
 # Télécharge le répertoire historisé des communes de l'OFS (données ouvertes, opendata.swiss) pour relier les
 # anciennes communes d'origine aux communes actuelles (fusions depuis 1848). Lecture seule : les fichiers sont gardés
-# comme artefact de ce run, rien d'autre n'est écrit.
+# sur la branche à part `donnees-ofs` (jamais sur main).
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   communes:
@@ -20,7 +20,7 @@ jobs:
           set -e
           mkdir -p ofs && cd ofs
           B=https://www.agvchapp.bfs.admin.ch/api/communes
-          FIN=$(date -d tomorrow +%d-%m-%Y)
+          FIN=$(date +%d-%m-%Y)
           get() { curl -sS --retry 3 -o "$1" -w "$1 %{http_code}\n" "$2" || true; }
           for D in 01-01-1848 01-01-1900 01-01-1960; do
             get "mutations-$D.csv" "$B/mutations?includeTerritoryExchange=false&startPeriod=$D&endPeriod=$FIN"
@@ -29,9 +29,18 @@ jobs:
           get snapshot.csv "$B/snapshot?date=$(date +%d-%m-%Y)"
           get levels.csv "$B/levels?date=$(date +%d-%m-%Y)"
           wc -l *.csv
-          head -c 400 mutations-01-01-1960.csv; echo; head -c 400 correspondances-01-01-1960.csv
-      - uses: actions/upload-artifact@v4
+          for f in *.csv; do echo "== $f"; head -c 300 "$f"; echo; done
+      - uses: actions/checkout@v4
         with:
-          name: communes-ofs
-          path: ofs/
-          retention-days: 90
+          path: depot
+      - name: Garder sur la branche donnees-ofs (données publiques de l'OFS, pas la branche principale)
+        run: |
+          cd depot
+          git config user.name "openfirm-bot"
+          git config user.email "contact@openfirm.ch"
+          git checkout --orphan donnees-ofs
+          git rm -rfq .
+          cp ../ofs/*.csv .
+          git add *.csv
+          git commit -qm "Répertoire historisé des communes (OFS), $(date +%F)"
+          git push -fq origin donnees-ofs
