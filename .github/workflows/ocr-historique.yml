@@ -1,0 +1,159 @@
+name: OCR historique (avant 2018)
+
+# Point 1 du 14.11.2026 (« oui » de Louis) : lire les scans de la FOSC d'avant 2018 avec Tesseract (gratuit), sur
+# 20 machines GitHub en même temps (minutes gratuites du dépôt public). Le code reste privé (macrostests/openfirm,
+# lu avec le jeton OPENFIRM_CODE, comme site-public.yml).
+#
+# Rien ne tourne tout seul : seulement à la main (ou par la relance automatique ci-dessous).
+# Aucun scan n'est téléchargé tant qu'un accord écrit n'existe pas : le code refuse toute adresse dont le site n'est
+# pas dans data/sources_autorisees.txt (vide). Les pages viennent donc d'abord de R2 (r2:…), déposées à la main.
+#
+# Le texte lu est chiffré avec cle_publique.pem avant d'être écrit dans R2 (_state/ocr/…, jamais servi au public) :
+# ni ce journal public, ni GitHub, ni Cloudflare ne peuvent le lire. Le journal ne montre que des comptes.
+# Reprise : relancer la même campagne ne refait que ce qui manque. Si des lots restent incomplets, le bilan relance
+# lui-même le workflow, deux fois au plus.
+# Essai sans données réelles : campagne « essai » -> pages inventées (« Exemple SA »), rien n'est écrit dans R2.
+
+on:
+  workflow_dispatch:
+    inputs:
+      campagne:
+        description: "Nom de la campagne (lettres, chiffres, - et _ ; « essai » = test sans données réelles)"
+        required: true
+        type: string
+        default: essai
+      manifeste:
+        description: "Manifeste dans R2 (ex. _state/ocr/manifestes/fosc-1930.tsv) ; ignoré pour « essai »"
+        type: string
+        default: ""
+      taches:
+        description: "Machines en parallèle (1 à 20)"
+        type: string
+        default: "20"
+      langues:
+        description: "Langues Tesseract"
+        type: string
+        default: "deu+fra+ita"
+      tour:
+        description: "Relance automatique n° (laisser 0)"
+        type: string
+        default: "0"
+      branche:
+        description: "Branche du code (vide = main)"
+        type: string
+        default: ""
+
+concurrency:
+  group: ocr-${{ inputs.campagne }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write   # seulement pour la relance automatique du bilan
+
+env:
+  CAMPAGNE: ${{ inputs.campagne }}
+  MANIFESTE: ${{ inputs.manifeste }}
+  LANGUES: ${{ inputs.langues }}
+  TACHES: ${{ inputs.taches }}
+  TOUR: ${{ inputs.tour }}
+
+jobs:
+  preparer:
+    runs-on: ubuntu-latest
+    outputs:
+      matrice: ${{ steps.m.outputs.matrice }}
+    steps:
+      - id: m
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, os, re, sys
+          c = os.environ["CAMPAGNE"]
+          if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", c):
+              sys.exit("campagne invalide")
+          if c != "essai" and not re.fullmatch(r"_state/ocr/manifestes/[A-Za-z0-9_.-]+\.tsv", os.environ["MANIFESTE"]):
+              sys.exit("manifeste : _state/ocr/manifestes/<nom>.tsv")
+          if not re.fullmatch(r"[a-z_+]{3,40}", os.environ["LANGUES"]):
+              sys.exit("langues invalides")
+          n = max(1, min(20, int(os.environ["TACHES"])))
+          print("matrice=" + json.dumps(list(range(n))))
+          EOF
+
+  ocr:
+    needs: preparer
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        tache: ${{ fromJSON(needs.preparer.outputs.matrice) }}
+    env:
+      R2_ACCOUNT_ID: ff81216e3bb191aa13a379e2f9244ab1
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      OF_CLE_PUBLIQUE: ${{ github.workspace }}/donnees/cle_publique.pem
+      NUM: ${{ matrix.tache }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: macrostests/openfirm
+          token: ${{ secrets.OPENFIRM_CODE }}
+          ref: ${{ inputs.branche || 'main' }}
+      - uses: actions/checkout@v4
+        with:
+          path: donnees
+          sparse-checkout: cle_publique.pem
+          sparse-checkout-cone-mode: false
+      - name: Tesseract et dépendances
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-deu tesseract-ocr-fra tesseract-ocr-ita \
+            tesseract-ocr-frk poppler-utils fonts-dejavu-core > /dev/null
+          tesseract --version | head -1
+          tesseract --list-langs | tr '\n' ' '; echo
+          pip install -q boto3 cryptography pillow numpy
+      - name: OCR
+        run: |
+          if [ "$CAMPAGNE" = "essai" ]; then
+            # pages inventées, stockage sur la machine seulement : rien n'est écrit dans R2
+            python3 tools/ocr_lot.py essai /tmp/essai 12
+            python3 tools/ocr_lot.py /tmp/essai/manifeste.tsv essai --tache "$NUM" --taches "$TACHES" \
+              --taille 2 --stockage /tmp/sto --langues "$LANGUES"
+            python3 tools/ocr_lot.py /tmp/essai/manifeste.tsv essai --tache "$NUM" --taches "$TACHES" \
+              --taille 2 --stockage /tmp/sto --langues "$LANGUES"   # 2e passage : doit tout sauter (reprise)
+          else
+            python3 tools/ocr_lot.py "r2:$MANIFESTE" "$CAMPAGNE" --tache "$NUM" --taches "$TACHES" \
+              --stockage r2 --langues "$LANGUES" --max-minutes 330
+          fi
+
+  bilan:
+    needs: ocr
+    if: ${{ always() && inputs.campagne != 'essai' }}
+    runs-on: ubuntu-latest
+    env:
+      R2_ACCOUNT_ID: ff81216e3bb191aa13a379e2f9244ab1
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      BRANCHE: ${{ inputs.branche }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: macrostests/openfirm
+          token: ${{ secrets.OPENFIRM_CODE }}
+          ref: ${{ inputs.branche || 'main' }}
+      - run: pip install -q boto3
+      - name: Bilan et relance
+        run: |
+          if python3 tools/ocr_lot.py bilan "r2:$MANIFESTE" "$CAMPAGNE" --stockage r2; then
+            echo "Campagne terminée."
+          elif [ "$TOUR" -lt 2 ]; then
+            echo "Lots incomplets : relance n° $((TOUR + 1))."
+            gh workflow run ocr-historique.yml -R "$GITHUB_REPOSITORY" -f campagne="$CAMPAGNE" \
+              -f manifeste="$MANIFESTE" -f taches="$TACHES" -f langues="$LANGUES" -f tour="$((TOUR + 1))" \
+              -f branche="$BRANCHE"
+          else
+            echo "Lots encore incomplets après 2 relances : pages en échec notées dans les fichiers d'état."
+            exit 1
+          fi
