@@ -1,0 +1,33 @@
+name: Communes OFS (répertoire historisé, données publiques)
+
+# Télécharge le répertoire historisé des communes de l'OFS (données ouvertes, opendata.swiss) pour relier les
+# anciennes communes d'origine aux communes actuelles (fusions depuis 1848). Lecture seule : les fichiers sont gardés
+# comme artefact de ce run, rien d'autre n'est écrit.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  communes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Télécharger
+        run: |
+          set -e
+          mkdir -p ofs && cd ofs
+          B=https://www.agvchapp.bfs.admin.ch/api/communes
+          FIN=$(date -d tomorrow +%d-%m-%Y)
+          curl -fsS --retry 3 -o mutations.csv "$B/mutations?includeTerritoryExchange=false&startPeriod=01-01-1848&endPeriod=$FIN"
+          curl -fsS --retry 3 -o correspondances.csv "$B/correspondances?includeUnmodified=false&includeTerritoryExchange=false&startPeriod=01-01-1848&endPeriod=$FIN"
+          curl -fsS --retry 3 -o snapshot.csv "$B/snapshot?date=$(date +%d-%m-%Y)"
+          wc -l *.csv
+          head -3 mutations.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: communes-ofs
+          path: ofs/
+          retention-days: 90
