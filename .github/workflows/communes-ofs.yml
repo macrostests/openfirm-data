@@ -21,11 +21,15 @@ jobs:
           mkdir -p ofs && cd ofs
           B=https://www.agvchapp.bfs.admin.ch/api/communes
           FIN=$(date -d tomorrow +%d-%m-%Y)
-          curl -fsS --retry 3 -o mutations.csv "$B/mutations?includeTerritoryExchange=false&startPeriod=01-01-1848&endPeriod=$FIN"
-          curl -fsS --retry 3 -o correspondances.csv "$B/correspondances?includeUnmodified=false&includeTerritoryExchange=false&startPeriod=01-01-1848&endPeriod=$FIN"
-          curl -fsS --retry 3 -o snapshot.csv "$B/snapshot?date=$(date +%d-%m-%Y)"
+          get() { curl -sS --retry 3 -o "$1" -w "$1 %{http_code}\n" "$2" || true; }
+          for D in 01-01-1848 01-01-1900 01-01-1960; do
+            get "mutations-$D.csv" "$B/mutations?includeTerritoryExchange=false&startPeriod=$D&endPeriod=$FIN"
+            get "correspondances-$D.csv" "$B/correspondances?includeUnmodified=false&includeTerritoryExchange=false&startPeriod=$D&endPeriod=$FIN"
+          done
+          get snapshot.csv "$B/snapshot?date=$(date +%d-%m-%Y)"
+          get levels.csv "$B/levels?date=$(date +%d-%m-%Y)"
           wc -l *.csv
-          head -3 mutations.csv
+          head -c 400 mutations-01-01-1960.csv; echo; head -c 400 correspondances-01-01-1960.csv
       - uses: actions/upload-artifact@v4
         with:
           name: communes-ofs
