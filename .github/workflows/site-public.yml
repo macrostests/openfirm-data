@@ -133,6 +133,21 @@ jobs:
           python tools/importer.py
           rm -f keys/openfirm-data.pem
 
+      # Marchés publics simap (interrupteur : variable de dépôt OF_MARCHES = 1). Préparation avant le build
+      # (bloc de l'accueil), chargement D1 après la recherche avancée. État et index compact gardés dans R2.
+      - name: Marchés publics (préparation)
+        if: ${{ !inputs.worker_seul && vars.OF_MARCHES == '1' }}
+        env:
+          OPENFIRM_DATA_KEY: ${{ secrets.OPENFIRM_DATA_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ff81216e3bb191aa13a379e2f9244ab1
+        run: |
+          mkdir -p keys dist/_marches && umask 077 && printf '%s\n' "$OPENFIRM_DATA_KEY" > keys/openfirm-data.pem
+          npx --yes wrangler@4 r2 object get openfirm-site/_state/marches.json.gz --file dist/_marches/etat-ancien.json.gz --remote || true
+          python tools/marches_nuit.py
+          rm -f keys/openfirm-data.pem
+          echo "OF_MARCHES=1" >> "$GITHUB_ENV"
+
       - name: Build et envoi vers R2
         if: ${{ !inputs.worker_seul }}
         run: |
@@ -175,6 +190,20 @@ jobs:
           fi
           npx --yes wrangler@4 r2 object put openfirm-site/_state/recherche.json.gz --file ../../dist/_recherche/etat.json.gz --remote
 
+      - name: Marchés publics (base D1)
+        if: ${{ !inputs.worker_seul && !inputs.a_blanc && vars.OF_MARCHES == '1' }}
+        working-directory: hosting/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ff81216e3bb191aa13a379e2f9244ab1
+        run: |
+          f=../../dist/_marches/charge.sql
+          if [ -s "$f" ] && grep -q "INSERT\|DELETE\|CREATE" "$f"; then
+            npx --yes wrangler@4 d1 execute openfirm-recherche --remote --file "$f" --yes
+          fi
+          npx --yes wrangler@4 r2 object put openfirm-site/_state/marches.json.gz --file ../../dist/_marches/etat-mp.json.gz --remote
+          npx --yes wrangler@4 r2 object put openfirm-site/_state/marches-index.json.gz --file ../../dist/_marches/index.json.gz --remote
+
       - name: Déploiement du Worker
         if: ${{ !inputs.a_blanc }}
         working-directory: hosting/worker
@@ -185,7 +214,8 @@ jobs:
           preview=1
           [ "$OF_ENV" = "production" ] && preview=0
           npx --yes wrangler@4 deploy --var "CSP:${{ steps.csp.outputs.csp }}" --var "PREVIEW:$preview" \
-            --var "VAGUE:$VAGUE" --var "LANGUES:$LANGUES" --var "VAGUE_P:$VAGUE_P"
+            --var "VAGUE:$VAGUE" --var "LANGUES:$LANGUES" --var "VAGUE_P:$VAGUE_P" \
+            --var "MARCHES:${{ vars.OF_MARCHES || '0' }}" --var "MARCHES_INDEX:${{ vars.OF_MARCHES_INDEX || '0' }}"
 
       - name: IndexNow (Bing)
         if: ${{ env.OF_ENV == 'production' && !inputs.worker_seul && !inputs.a_blanc }}
