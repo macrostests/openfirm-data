@@ -37,10 +37,10 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ff81216e3bb191aa13a379e2f9244ab1
         run: |
           pip install cryptography >/dev/null
-          mkdir -p keys dist/_marches && umask 077 && printf '%s\n' "$OPENFIRM_DATA_KEY" > keys/openfirm-data.pem
-          npx --yes wrangler@4 r2 object get openfirm-site/_state/marches-index.json.gz --file dist/_marches/index.json.gz --remote
-          python tools/marches_nuit.py --matin dist/_marches/index.json.gz
+          mkdir -p keys data/_marches && umask 077 && printf '%s\n' "$OPENFIRM_DATA_KEY" > keys/openfirm-data.pem
+          npx --yes wrangler@4 r2 object get openfirm-site/_state/marches-index.json.gz --file data/_marches/index.json.gz --remote
+          python tools/marches_nuit.py --matin data/_marches/index.json.gz
           rm -f keys/openfirm-data.pem
-          if [ -s dist/_marches/matin.sql ]; then
-            cd hosting/worker && npx --yes wrangler@4 d1 execute openfirm-recherche --remote --file ../../dist/_marches/matin.sql --yes
+          if [ -s data/_marches/matin.sql ]; then
+            cd hosting/worker && npx --yes wrangler@4 d1 execute openfirm-recherche --remote --file ../../data/_marches/matin.sql --yes
           fi

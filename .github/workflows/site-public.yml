@@ -142,8 +142,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ff81216e3bb191aa13a379e2f9244ab1
         run: |
-          mkdir -p keys dist/_marches && umask 077 && printf '%s\n' "$OPENFIRM_DATA_KEY" > keys/openfirm-data.pem
-          npx --yes wrangler@4 r2 object get openfirm-site/_state/marches.json.gz --file dist/_marches/etat-ancien.json.gz --remote || true
+          mkdir -p keys data/_marches && umask 077 && printf '%s\n' "$OPENFIRM_DATA_KEY" > keys/openfirm-data.pem
+          npx --yes wrangler@4 r2 object get openfirm-site/_state/marches.json.gz --file data/_marches/etat-ancien.json.gz --remote || true
           python tools/marches_nuit.py
           rm -f keys/openfirm-data.pem
           echo "OF_MARCHES=1" >> "$GITHUB_ENV"
@@ -197,12 +197,12 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ff81216e3bb191aa13a379e2f9244ab1
         run: |
-          f=../../dist/_marches/charge.sql
+          f=../../data/_marches/charge.sql
           if [ -s "$f" ] && grep -q "INSERT\|DELETE\|CREATE" "$f"; then
             npx --yes wrangler@4 d1 execute openfirm-recherche --remote --file "$f" --yes
           fi
-          npx --yes wrangler@4 r2 object put openfirm-site/_state/marches.json.gz --file ../../dist/_marches/etat-mp.json.gz --remote
-          npx --yes wrangler@4 r2 object put openfirm-site/_state/marches-index.json.gz --file ../../dist/_marches/index.json.gz --remote
+          npx --yes wrangler@4 r2 object put openfirm-site/_state/marches.json.gz --file ../../data/_marches/etat-mp.json.gz --remote
+          npx --yes wrangler@4 r2 object put openfirm-site/_state/marches-index.json.gz --file ../../data/_marches/index.json.gz --remote
 
       - name: Déploiement du Worker
         if: ${{ !inputs.a_blanc }}
