@@ -152,6 +152,8 @@ def main():
     ap.add_argument("--fils", type=int, default=16)
     ap.add_argument("--texte", action="store_true", help="garder le texte des pages (chiffré) pour l'essai nom + NPA")
     ap.add_argument("--sortes", default="", help="ex. impressum,contact : ne lire que ces sortes de pages")
+    ap.add_argument("--partie", type=int, default=0, help="lecture complète découpée : numéro de cette partie (0…n-1)")
+    ap.add_argument("--parties", type=int, default=1)
     ap.add_argument("--out", default="out")
     ap.add_argument("--pub", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "cle_publique.pem"))
     a = ap.parse_args()
@@ -171,8 +173,12 @@ def main():
             return ("impressum" if re.search(r"(impressum|imprint|mentions|legal|rechtlich|note-legali|colophon)", u)
                     else "contact" if r[5] else "accueil")
         cand = [r for r in cand if sorte(r) in voulu]
+    if a.parties > 1:  # partage stable des pages entre machines
+        import zlib
+        cand = [r for r in cand if zlib.crc32(r[0].encode()) % a.parties == a.partie]
     random.Random(7).shuffle(cand)
-    cand = cand[:a.echantillon]
+    if a.echantillon:
+        cand = cand[:a.echantillon]
     res, erreurs = [], 0
     t1 = time.time()
     with cf.ThreadPoolExecutor(a.fils) as ex:
@@ -182,7 +188,7 @@ def main():
                 res.append(f.result())
             except Exception:
                 erreurs += 1
-            if (i + 1) % 2000 == 0:
+            if (i + 1) % 5000 == 0:
                 print("lu %d/%d (%d erreurs)" % (i + 1, len(cand), erreurs), file=sys.stderr, flush=True)
     dur = time.time() - t1
     avec = [r for r in res if r["ides"]]
@@ -205,7 +211,7 @@ def main():
         "pages_avec_plusieurs_ide": sum(1 for r in avec if len(r["ides"]) > 1),
     })
     print("STATS " + json.dumps(stats, ensure_ascii=False), file=sys.stderr)
-    nom = "sites-%s-%s" % ("texte" if a.texte else "essai", crawl)
+    nom = "sites-%s-%s" % ("texte" if a.texte else "essai", crawl) + ("-p%d" % a.partie if a.parties > 1 else "")
     garder = res if a.texte else avec
     run(nom, lambda w: [w(r) for r in garder] and None, a.out, a.pub)
     json.dump(stats, open(os.path.join(a.out, nom + ".stats.json"), "w"), ensure_ascii=False, indent=1)

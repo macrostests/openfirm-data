@@ -1,0 +1,52 @@
+name: Sites web des sociétés (lecture complète Common Crawl)
+on:
+  workflow_dispatch:
+    inputs:
+      crawl:
+        description: "Collecte Common Crawl (vide = la plus récente)"
+        required: false
+        default: ""
+      parties:
+        description: "Nombre de machines"
+        required: false
+        default: "6"
+permissions:
+  contents: write
+concurrency:
+  group: sites
+  cancel-in-progress: false
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      p: ${{ steps.p.outputs.p }}
+    steps:
+      - id: p
+        run: echo "p=$(python3 -c 'import json; print(json.dumps(list(range(int("${{ inputs.parties }}")))))')" >> "$GITHUB_OUTPUT"
+  lecture:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        partie: ${{ fromJson(needs.plan.outputs.p) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install duckdb cryptography requests lxml
+      - name: Lecture
+        run: |
+          args="--echantillon 0 --texte --sortes impressum,contact --partie ${{ matrix.partie }} --parties ${{ inputs.parties }} --fils 12"
+          [ -n "${{ inputs.crawl }}" ] && args="$args --crawl ${{ inputs.crawl }}"
+          python cc_sites.py $args --out out
+      - name: Envoi (chiffré)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls out/ 2>/dev/null || exit 0
+          gh release view sites >/dev/null 2>&1 || gh release create sites --title sites --notes "Sites web des sociétés (Common Crawl), fichiers chiffrés." || true
+          gh release upload sites out/* --clobber
