@@ -70,7 +70,17 @@ def interroger(fichiers, limite_par_fichier, graine):
     domaines, domaines_leg = set(), set()
     cand = []
 
-    def un(f):
+    def un(f, essai=0):
+        try:
+            return un1(f)
+        except Exception as e:  # Common Crawl coupe parfois : on attend et on recommence
+            if essai >= 5:
+                print("index : abandon d'un fichier après 6 essais (%s)" % str(e)[:80], file=sys.stderr)
+                return (0, 0), []
+            time.sleep(10 * (essai + 1))
+            return un(f, essai + 1)
+
+    def un1(f):
         c = duckdb.connect()
         c.execute("LOAD httpfs; SET http_retries=5;")
         tot = c.execute("SELECT count(*), count(DISTINCT url_host_registered_domain) FROM read_parquet(?) "
@@ -84,7 +94,7 @@ def interroger(fichiers, limite_par_fichier, graine):
             [PAGES_LEGALES, f, PAGES_LEGALES]).fetchall()
         return tot, rows
 
-    with cf.ThreadPoolExecutor(8) as ex:
+    with cf.ThreadPoolExecutor(4) as ex:
         for k, (tot, rows) in enumerate(ex.map(un, fichiers)):
             stats["pages_ch"] += tot[0]
             for r in rows:
