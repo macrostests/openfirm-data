@@ -133,10 +133,10 @@ jobs:
           python tools/importer.py
           rm -f keys/openfirm-data.pem
 
-      # Marchés publics simap (interrupteur : variable de dépôt OF_MARCHES = 1). Préparation avant le build
+      # Marchés publics simap (allumés depuis le 19.11, « ok » de Louis ; pour couper : variable de dépôt OF_MARCHES = 0). Préparation avant le build
       # (bloc de l'accueil), chargement D1 après la recherche avancée. État et index compact gardés dans R2.
       - name: Marchés publics (préparation)
-        if: ${{ !inputs.worker_seul && vars.OF_MARCHES == '1' }}
+        if: ${{ !inputs.worker_seul && vars.OF_MARCHES != '0' }}
         env:
           OPENFIRM_DATA_KEY: ${{ secrets.OPENFIRM_DATA_KEY }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -192,7 +192,7 @@ jobs:
           npx --yes wrangler@4 r2 object put openfirm-site/_state/recherche.json.gz --file ../../dist/_recherche/etat.json.gz --remote
 
       - name: Marchés publics (base D1)
-        if: ${{ !inputs.worker_seul && !inputs.a_blanc && vars.OF_MARCHES == '1' }}
+        if: ${{ !inputs.worker_seul && !inputs.a_blanc && vars.OF_MARCHES != '0' }}
         working-directory: hosting/worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -216,7 +216,7 @@ jobs:
           [ "$OF_ENV" = "production" ] && preview=0
           npx --yes wrangler@4 deploy --var "CSP:${{ steps.csp.outputs.csp }}" --var "PREVIEW:$preview" \
             --var "VAGUE:$VAGUE" --var "LANGUES:$LANGUES" --var "VAGUE_P:$VAGUE_P" \
-            --var "MARCHES:${{ vars.OF_MARCHES || '0' }}" --var "MARCHES_INDEX:${{ vars.OF_MARCHES_INDEX || '0' }}"
+            --var "MARCHES:${{ vars.OF_MARCHES || '1' }}" --var "MARCHES_INDEX:${{ vars.OF_MARCHES_INDEX || '0' }}"
 
       - name: IndexNow (Bing)
         if: ${{ env.OF_ENV == 'production' && !inputs.worker_seul && !inputs.a_blanc }}
