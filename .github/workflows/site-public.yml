@@ -216,7 +216,7 @@ jobs:
           [ "$OF_ENV" = "production" ] && preview=0
           npx --yes wrangler@4 deploy --var "CSP:${{ steps.csp.outputs.csp }}" --var "PREVIEW:$preview" \
             --var "VAGUE:$VAGUE" --var "LANGUES:$LANGUES" --var "VAGUE_P:$VAGUE_P" \
-            --var "MARCHES:${{ vars.OF_MARCHES_COUPE == '1' && '0' || '1' }}" --var "MARCHES_INDEX:${{ vars.OF_MARCHES_INDEX || '0' }}"
+            --var "MARCHES:${{ vars.OF_MARCHES_COUPE == '1' && '0' || '1' }}" --var "MARCHES_INDEX:${{ vars.OF_MARCHES_INDEXER == '1' && '1' || '0' }}"
 
       - name: IndexNow (Bing)
         if: ${{ env.OF_ENV == 'production' && !inputs.worker_seul && !inputs.a_blanc }}
