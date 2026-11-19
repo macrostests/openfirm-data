@@ -1,0 +1,42 @@
+name: Sites web des sociétés (essai Common Crawl)
+on:
+  workflow_dispatch:
+    inputs:
+      fichiers:
+        description: "Nombre de fichiers d'index Common Crawl à lire (0 = tous, environ 300)"
+        required: false
+        default: "0"
+      echantillon:
+        description: "Nombre de pages archivées à lire"
+        required: false
+        default: "20000"
+      crawl:
+        description: "Collecte Common Crawl (vide = la plus récente)"
+        required: false
+        default: ""
+permissions:
+  contents: write
+concurrency:
+  group: sites
+  cancel-in-progress: false
+jobs:
+  essai:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install duckdb cryptography
+      - name: Essai
+        run: |
+          args="--fichiers ${{ inputs.fichiers }} --echantillon ${{ inputs.echantillon }}"
+          [ -n "${{ inputs.crawl }}" ] && args="$args --crawl ${{ inputs.crawl }}"
+          python cc_sites.py $args --out out
+      - name: Envoi (chiffré)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view sites >/dev/null 2>&1 || gh release create sites --title sites --notes "Sites web des sociétés (Common Crawl), fichiers chiffrés." || true
+          gh release upload sites out/*.enc out/*.stats.json --clobber
