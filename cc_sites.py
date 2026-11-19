@@ -94,9 +94,7 @@ def interroger(fichiers, limite_par_fichier, graine):
                     domaines_leg.add(r[1])
                 else:
                     stats["pages_accueil"] += 1
-            rnd = random.Random(graine + k)
-            rnd.shuffle(rows)
-            cand.extend(rows[:limite_par_fichier])
+            cand.extend(rows)
             print("index %d/%d : %d pages .ch, %d candidates" % (k + 1, len(fichiers), tot[0], len(rows)),
                   file=sys.stderr, flush=True)
     stats["domaines_avec_candidate"] = len(domaines)
@@ -111,10 +109,20 @@ def lire(rec):
     # WARC → en-têtes WARC, en-têtes HTTP, corps
     parts = data.split(b"\r\n\r\n", 2)
     corps = parts[2] if len(parts) == 3 else b""
+    entetes = parts[1].lower() if len(parts) > 1 else b""
+    if corps[:2] == b"\x1f\x8b":
+        try:
+            corps = gzip.decompress(corps)
+        except Exception:
+            pass
+    elif b"transfer-encoding: chunked" in entetes:
+        corps = re.sub(rb"\r\n[0-9a-fA-F]{1,6}\r\n", b"", corps)
     txt = corps[:2_000_000].decode("utf-8", "replace")
     txt = re.sub(r"<[^>]+>", " ", txt)
     ides = sorted({"CHE-%s.%s.%s" % m for m in RE_IDE.findall(txt) if ide_valide("".join(m))})
-    return {"domaine": dom, "url": url, "legale": bool(legale), "ides": ides}
+    sorte = ("impressum" if re.search(r"(impressum|imprint|mentions|legal|rechtlich|note-legali|colophon)", url.lower())
+             else "contact" if legale else "accueil")
+    return {"domaine": dom, "url": url, "legale": bool(legale), "sorte": sorte, "ides": ides}
 
 
 def main():
@@ -159,6 +167,8 @@ def main():
         "pages_avec_ide": len(avec),
         "taux_pages_legales": round(sum(1 for r in leg if r["ides"]) / max(len(leg), 1), 3),
         "taux_pages_accueil": round(sum(1 for r in acc if r["ides"]) / max(len(acc), 1), 3),
+        "par_sorte": {so: [sum(1 for r in res if r["sorte"] == so),
+                           sum(1 for r in res if r["sorte"] == so and r["ides"])] for so in ("impressum", "contact", "accueil")},
         "domaines_lus": len(dom_lus), "domaines_avec_ide": len(dom_ide),
         "taux_domaines": round(len(dom_ide) / max(len(dom_lus), 1), 3),
         "ide_distincts": len(ides),
