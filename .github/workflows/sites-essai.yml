@@ -14,6 +14,10 @@ on:
         description: "Collecte Common Crawl (vide = la plus récente)"
         required: false
         default: ""
+      options:
+        description: "Options en plus (ex. --texte --sortes impressum,contact)"
+        required: false
+        default: ""
 permissions:
   contents: write
 concurrency:
@@ -33,7 +37,7 @@ jobs:
         run: |
           args="--fichiers ${{ inputs.fichiers }} --echantillon ${{ inputs.echantillon }}"
           [ -n "${{ inputs.crawl }}" ] && args="$args --crawl ${{ inputs.crawl }}"
-          python cc_sites.py $args --out out
+          python cc_sites.py $args ${{ inputs.options }} --out out
       - name: Envoi (chiffré)
         env:
           GH_TOKEN: ${{ github.token }}

@@ -112,6 +112,9 @@ def interroger(fichiers, limite_par_fichier, graine):
     return stats, cand
 
 
+GARDER_TEXTE = False
+
+
 def lire(rec):
     url, dom, wf, off, ln, legale = rec
     raw = get(BASE + wf, (off, off + ln - 1))
@@ -128,11 +131,17 @@ def lire(rec):
     elif b"transfer-encoding: chunked" in entetes:
         corps = re.sub(rb"\r\n[0-9a-fA-F]{1,6}\r\n", b"", corps)
     txt = corps[:2_000_000].decode("utf-8", "replace")
+    txt = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", txt)
     txt = re.sub(r"<[^>]+>", " ", txt)
+    import html as _h
+    txt = re.sub(r"\s+", " ", _h.unescape(txt))
     ides = sorted({"CHE-%s.%s.%s" % m for m in RE_IDE.findall(txt) if ide_valide("".join(m))})
     sorte = ("impressum" if re.search(r"(impressum|imprint|mentions|legal|rechtlich|note-legali|colophon)", url.lower())
              else "contact" if legale else "accueil")
-    return {"domaine": dom, "url": url, "legale": bool(legale), "sorte": sorte, "ides": ides}
+    r = {"domaine": dom, "url": url, "legale": bool(legale), "sorte": sorte, "ides": ides}
+    if GARDER_TEXTE:
+        r["texte"] = txt[:30000]
+    return r
 
 
 def main():
@@ -141,6 +150,8 @@ def main():
     ap.add_argument("--fichiers", type=int, default=0, help="nombre de fichiers d'index (0 = tous)")
     ap.add_argument("--echantillon", type=int, default=20000)
     ap.add_argument("--fils", type=int, default=16)
+    ap.add_argument("--texte", action="store_true", help="garder le texte des pages (chiffré) pour l'essai nom + NPA")
+    ap.add_argument("--sortes", default="", help="ex. impressum,contact : ne lire que ces sortes de pages")
     ap.add_argument("--out", default="out")
     ap.add_argument("--pub", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "cle_publique.pem"))
     a = ap.parse_args()
@@ -151,6 +162,15 @@ def main():
     t0 = time.time()
     stats, cand = interroger(fichiers, max(1, a.echantillon // len(fichiers) + 1), 20261119)
     print("collecte %s, %d fichiers d'index lus en %d s" % (crawl, len(fichiers), time.time() - t0), file=sys.stderr)
+    global GARDER_TEXTE
+    GARDER_TEXTE = a.texte
+    if a.sortes:
+        voulu = set(a.sortes.split(","))
+        def sorte(r):
+            u = r[0].lower()
+            return ("impressum" if re.search(r"(impressum|imprint|mentions|legal|rechtlich|note-legali|colophon)", u)
+                    else "contact" if r[5] else "accueil")
+        cand = [r for r in cand if sorte(r) in voulu]
     random.Random(7).shuffle(cand)
     cand = cand[:a.echantillon]
     res, erreurs = [], 0
@@ -185,8 +205,9 @@ def main():
         "pages_avec_plusieurs_ide": sum(1 for r in avec if len(r["ides"]) > 1),
     })
     print("STATS " + json.dumps(stats, ensure_ascii=False), file=sys.stderr)
-    nom = "sites-essai-%s" % crawl
-    run(nom, lambda w: [w(r) for r in avec] and None, a.out, a.pub)
+    nom = "sites-%s-%s" % ("texte" if a.texte else "essai", crawl)
+    garder = res if a.texte else avec
+    run(nom, lambda w: [w(r) for r in garder] and None, a.out, a.pub)
     json.dump(stats, open(os.path.join(a.out, nom + ".stats.json"), "w"), ensure_ascii=False, indent=1)
 
 
