@@ -154,6 +154,7 @@ def main():
     ap.add_argument("--sortes", default="", help="ex. impressum,contact : ne lire que ces sortes de pages")
     ap.add_argument("--partie", type=int, default=0, help="lecture complète découpée : numéro de cette partie (0…n-1)")
     ap.add_argument("--parties", type=int, default=1)
+    ap.add_argument("--minutes", type=int, default=0, help="arrêter la lecture après ce temps et garder le résultat")
     ap.add_argument("--out", default="out")
     ap.add_argument("--pub", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "cle_publique.pem"))
     a = ap.parse_args()
@@ -181,15 +182,26 @@ def main():
         cand = cand[:a.echantillon]
     res, erreurs = [], 0
     t1 = time.time()
-    with cf.ThreadPoolExecutor(a.fils) as ex:
-        futs = [ex.submit(lire, r) for r in cand]
+    fin = time.time() + a.minutes * 60 if a.minutes else None
+    ex = cf.ThreadPoolExecutor(a.fils)
+    futs = [ex.submit(lire, r) for r in cand]
+    arrete = False
+    try:
         for i, f in enumerate(cf.as_completed(futs)):
             try:
                 res.append(f.result())
             except Exception:
                 erreurs += 1
+            if fin and time.time() > fin and not arrete:  # limite de temps : on garde ce qui est lu
+                arrete = True
+                for g in futs:
+                    g.cancel()
+                print("limite de temps atteinte : %d pages lues sur %d" % (len(res), len(cand)), file=sys.stderr)
+                break
             if (i + 1) % 5000 == 0:
                 print("lu %d/%d (%d erreurs)" % (i + 1, len(cand), erreurs), file=sys.stderr, flush=True)
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
     dur = time.time() - t1
     avec = [r for r in res if r["ides"]]
     dom_lus = {r["domaine"] for r in res}

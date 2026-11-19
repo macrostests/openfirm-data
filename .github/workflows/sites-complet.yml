@@ -39,7 +39,7 @@ jobs:
       - run: pip install duckdb cryptography requests lxml
       - name: Lecture
         run: |
-          args="--echantillon 0 --texte --sortes impressum,contact --partie ${{ matrix.partie }} --parties ${{ inputs.parties }} --fils 12"
+          args="--echantillon 0 --texte --sortes impressum,contact --partie ${{ matrix.partie }} --parties ${{ inputs.parties }} --fils 12 --minutes 300"
           [ -n "${{ inputs.crawl }}" ] && args="$args --crawl ${{ inputs.crawl }}"
           python cc_sites.py $args --out out
       - name: Envoi (chiffré)
