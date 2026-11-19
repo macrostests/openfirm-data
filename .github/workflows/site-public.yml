@@ -141,6 +141,7 @@ jobs:
           OPENFIRM_DATA_KEY: ${{ secrets.OPENFIRM_DATA_KEY }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ff81216e3bb191aa13a379e2f9244ab1
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p keys data/_marches && umask 077 && printf '%s\n' "$OPENFIRM_DATA_KEY" > keys/openfirm-data.pem
           npx --yes wrangler@4 r2 object get openfirm-site/_state/marches.json.gz --file data/_marches/etat-ancien.json.gz --remote || true
