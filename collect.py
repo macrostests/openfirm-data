@@ -7,7 +7,9 @@ Sources officielles, ouvertes et gratuites :
 
 Rythme poli : une seule requête à la fois, au plus ~3 requêtes par seconde, pauses sur erreur.
 Minimisation : les avis de faillite de personnes physiques ne sont pas conservés (seul l'identifiant reste,
-avec un drapeau), ni leur titre ni leur texte.
+avec un drapeau), ni leur titre ni leur texte. Exception (20.11.2026, décision de Louis) : un avis qui désigne une
+raison individuelle inscrite (IDE dans l'avis, ou mention « raison individuelle / Einzelunternehmen / titulaire… »)
+est gardé : c'est la faillite d'une entreprise du registre. Les particuliers et successions sans lien restent écartés.
 
 Les fichiers produits sont chiffrés (RSA-OAEP 4096 + AES-256-GCM) avec cle_publique.pem :
 ils sont publiés dans ce dépôt public, mais seul le détenteur de la clé privée peut les lire.
@@ -25,6 +27,7 @@ import gzip
 import io
 import json
 import os
+import re
 import struct
 import sys
 import threading
@@ -139,6 +142,25 @@ def fetch_xml(pid):
     return to_obj(content) if content is not None else None
 
 
+MOTS_RI = re.compile(r"(einzelunternehmen|einzelunternehmung|einzelfirma|inhaber|raison individuelle|"
+                     r"entreprise individuelle|titulaire|ditta individuale|titolare|impresa individuale)", re.I)
+UID_TXT = re.compile(r"CHE-?\d{3}\.?\d{3}\.?\d{3}")
+
+
+def _texte(o):
+    if isinstance(o, dict):
+        return " ".join(_texte(v) for v in o.values())
+    if isinstance(o, list):
+        return " ".join(_texte(v) for v in o)
+    return str(o or "")
+
+
+def raison_individuelle(o):
+    """Avis de faillite d'une personne qui désigne une raison individuelle inscrite (IDE ou mention explicite)."""
+    t = _texte(o)
+    return bool(UID_TXT.search(t) or MOTS_RI.search(t))
+
+
 def person_debtor(o):
     d = o.get("debtor") if isinstance(o, dict) else None
     return isinstance(d, dict) and bool(d.get("person") or d.get("persons")) and not d.get("companies")
@@ -146,7 +168,7 @@ def person_debtor(o):
 
 def collect_days(days, writer, garder=None):
     """garder(meta) -> bool : ne récupère que ces publications (mode complément)."""
-    n = np = 0
+    n = np = nri = 0
     for day in days:
         metas = list_day(day)
         if garder is not None:
@@ -163,12 +185,17 @@ def collect_days(days, writer, garder=None):
             fetched = list(ex.map(one, metas))
         for m, o in fetched:
             if m["r"] == "KK" and person_debtor(o):
+                if raison_individuelle(o):
+                    writer({"m": m, "x": o, "ri": 1})
+                    nri += 1
+                    continue
                 writer({"m": {"id": m["id"], "d": m["d"], "r": "KK", "s": m["s"]}, "personne": 1})
                 np += 1
                 continue
             writer({"m": m, "x": o})
             n += 1
-    print("total", n, "conservées,", np, "faillites de personnes réduites à l'identifiant", file=sys.stderr)
+    print("total", n, "conservées,", nri, "faillites de raisons individuelles gardées,", np,
+          "faillites de personnes réduites à l'identifiant", file=sys.stderr)
 
 
 # ---------- LINDAS ----------
@@ -277,7 +304,7 @@ def run(name, fn, out, pub):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["fosc-mois", "fosc-periode", "fosc-jour", "fosc-complement", "lindas", "communes", "dechiffrer"])
+    ap.add_argument("mode", choices=["fosc-mois", "fosc-periode", "fosc-jour", "fosc-complement", "fosc-ri", "lindas", "communes", "dechiffrer"])
     ap.add_argument("arg", nargs="?")
     ap.add_argument("--out", default="out")
     ap.add_argument("--pub", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "cle_publique.pem"))
@@ -314,6 +341,14 @@ def main():
             return m["id"] not in kk
         lot = os.path.splitext(os.path.basename(a.arg))[0]
         run("fosc-complement-%s" % lot, lambda w: collect_days(spec["jours"], w, garder), a.out, a.pub)
+    elif a.mode == "fosc-ri":
+        # arg = complements/ri-<lot>.json : {"jours": [...], "kk_connus": [identifiants KK déjà collectés (sociétés)]}
+        # Rattrapage (20.11.2026) des faillites de raisons individuelles : seulement les avis KK pas encore connus.
+        spec = json.load(open(a.arg))
+        kk = set(spec["kk_connus"])
+        lot = os.path.splitext(os.path.basename(a.arg))[0]
+        run("fosc-%s" % lot, lambda w: collect_days(spec["jours"], w,
+                                                    lambda m: m.get("r") == "KK" and m["id"] not in kk), a.out, a.pub)
     elif a.mode == "lindas":
         run("lindas-%s" % dt.date.today().isoformat(), collect_lindas, a.out, a.pub)
         run("communes-%s" % dt.date.today().isoformat(), collect_communes, a.out, a.pub)

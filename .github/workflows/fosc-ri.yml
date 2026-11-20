@@ -1,0 +1,26 @@
+name: Rattrapage des faillites de raisons individuelles (2018 → 19.11.2026)
+# 20.11.2026, décision de Louis : les avis de faillite dont le débiteur est le titulaire d'une raison individuelle
+# inscrite sont gardés (collect.py raison_individuelle) ; les particuliers et successions sans lien restent réduits à
+# l'identifiant. Seuls les avis KK pas encore collectés sont lus (complements/ri-AAAA.json : jours, KK déjà connus).
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  an:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        an: [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install requests lxml cryptography
+      - run: python3 collect.py fosc-ri complements/ri-${{ matrix.an }}.json
+      - name: Publier
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh release upload fosc out/* --clobber
