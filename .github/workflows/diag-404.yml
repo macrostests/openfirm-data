@@ -1,0 +1,14 @@
+name: Diagnostic 404 (lecture seule)
+# GET/HEAD publics sur openfirm.ch seulement : ne publie rien, aucune clé, ne touche ni R2, ni D1, ni le Worker.
+on:
+  push:
+    branches: [diag-404]
+permissions:
+  contents: read
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - run: BALAYAGE=1 python3 tools/diag_404.py
